@@ -1,5 +1,7 @@
 # HERALD codebase
 
+## AN ENTRY TO THE DIVISION SCIENCE AND TECHNOLOGY FAIR - DIVISION OF QUEZON - REGION IV-A CALABARZON - PHILIPPINES
+
 HERALD is a ROS 2 Humble rover stack with an ESP32 motor controller, a Raspberry Pi 4 compute node, a 2D LiDAR, and an MPU6050 IMU.
 
 ## Layout
@@ -140,5 +142,3 @@ python3 field_testing/plot_raw_vs_corrected.py <bag_path> <output_png>
 - The hazard node is geometric only and cannot identify object semantics without a camera and vision model.
 - There is no INA219 current telemetry, so motor stalls require video or other external review.
 - The fixed-frontier selector chooses the largest frontier cluster, not necessarily the closest one.
-
-The code has not been verified on the physical rover in this archive. Confirm wiring, calibration, power, serial communication, and emergency-stop behavior before field operation.
