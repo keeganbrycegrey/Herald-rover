@@ -1,0 +1,10 @@
+
+tilt_compensation_node:
+  ros__parameters:
+    phi_mount_deg: 15.0
+    mount_height_m: 0.21
+
+floor_drop_detector_node:
+  ros__parameters:
+    phi_mount_deg: 15.0
+    mount_height_m: 0.21

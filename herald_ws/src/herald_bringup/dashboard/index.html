@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<!--
+HERALD Telemetry Dashboard
+--------------------------------------------------------------------
+Single-file dashboard. Connects to rosbridge_websocket (started by
+herald_autonomy.launch.py, default ws://<pi-ip>:9090) over your
+laptop's network connection to the Pi. No ROS install needed on the
+laptop -- just a browser.
+
+Shows: live occupancy grid map with robot pose overlay, autonomy
+state + start/cancel controls, click-to-navigate (active only once
+exploration is done), floor-drop alert, IMU roll/pitch, wheel
+odometry speed, connection status.
+
+Update PI_IP below (or type it into the connection box at runtime).
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>HERALD Telemetry</title>
+<script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    background: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', system-ui, sans-serif;
+    margin: 0; padding: 16px;
+  }
+  h1 { font-size: 18px; margin: 0 0 12px; color: #58a6ff; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 16px;
+  }
+  .panel {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px;
+  }
+  #mapCanvas {
+    background: #010409; border-radius: 6px; width: 100%; cursor: crosshair;
+    display: block;
+  }
+  .status-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #21262d; font-size: 13px; }
+  .status-row:last-child { border-bottom: none; }
+  .label { color: #8b949e; }
+  .value { font-weight: 600; }
+  .ok { color: #3fb950; }
+  .warn { color: #d29922; }
+  .danger { color: #f85149; }
+  button {
+    background: #238636; color: white; border: none; border-radius: 6px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer; margin-right: 8px; margin-top: 8px;
+  }
+  button.secondary { background: #30363d; }
+  button:disabled { background: #21262d; color: #6e7681; cursor: not-allowed; }
+  input[type=text] {
+    background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+    border-radius: 6px; padding: 6px 8px; width: 100%; font-size: 13px;
+  }
+  .hint { font-size: 11px; color: #6e7681; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<h1>HERALD Telemetry</h1>
+
+<div class="panel" style="margin-bottom: 16px;">
+  <div class="status-row">
+    <span class="label">Rosbridge connection</span>
+    <input type="text" id="wsUrl" value="ws://herald.local:9090" style="width: 220px; margin-right:8px;">
+    <button id="connectBtn">Connect</button>
+    <span class="value" id="connStatus">disconnected</span>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <canvas id="mapCanvas" width="700" height="700"></canvas>
+    <div class="hint">Click the map to send a goal (only works once autonomy state is AWAITING_GOAL).</div>
+  </div>
+
+  <div>
+    <div class="panel" style="margin-bottom: 16px;">
+      <div class="status-row"><span class="label">Autonomy state</span><span class="value" id="autonomyState">--</span></div>
+      <div class="status-row"><span class="label">Mode</span><span class="value" id="autonomyMode">--</span></div>
+      <div class="status-row"><span class="label">Floor drop</span><span class="value" id="floorDrop">--</span></div>
+      <div class="status-row"><span class="label">Nearest floor range</span><span class="value" id="floorRange">--</span></div>
+      <div class="status-row"><span class="label">IMU roll / pitch</span><span class="value" id="imuRP">--</span></div>
+      <div class="status-row"><span class="label">Wheel odom speed</span><span class="value" id="odomSpeed">--</span></div>
+
+      <div class="hint" style="margin-top:10px;">Mode (set before starting)</div>
+      <select id="modeSelect" style="width:100%; margin-top:4px; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:6px;">
+        <option value="explore_then_navigate">Explore, then navigate (both)</option>
+        <option value="explore_only">Explore only</option>
+        <option value="navigate_only">Navigate only (needs existing map)</option>
+      </select>
+      <button id="setModeBtn" class="secondary">Set Mode</button>
+
+      <div style="margin-top:10px;">
+        <button id="startExploreBtn">Start Explore</button>
+        <button id="startNavigateBtn" class="secondary">Start Navigate</button>
+        <button id="cancelBtn" class="secondary">Cancel</button>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom: 16px;">
+      <div class="status-row">
+        <span class="label">Manual override</span>
+        <button id="overrideToggleBtn" class="secondary">Enable</button>
+      </div>
+      <div class="hint">While engaged, Nav2 is locked out entirely -- only the controls below drive the rover. Autonomy pauses and resumes from IDLE when you disable it.</div>
+      <div id="teleopPad" style="display:grid; grid-template-columns: repeat(3, 60px); gap:6px; margin-top:12px; justify-content:center; opacity:0.4; pointer-events:none;">
+        <div></div>
+        <button class="secondary" data-lin="0.3" data-ang="0">&#8593;</button>
+        <div></div>
+        <button class="secondary" data-lin="0" data-ang="0.6">&#8592;</button>
+        <button class="secondary" data-lin="0" data-ang="0" id="stopBtn">&#9632;</button>
+        <button class="secondary" data-lin="0" data-ang="-0.6">&#8594;</button>
+        <div></div>
+        <button class="secondary" data-lin="-0.3" data-ang="0">&#8595;</button>
+        <div></div>
+      </div>
+      <div class="hint" style="text-align:center; margin-top:6px;">Hold a button to drive; releases to stop. Arrow keys also work once override is enabled.</div>
+    </div>
+
+    <div class="panel" style="margin-bottom: 16px;">
+      <div class="status-row"><span class="label">Detected hazards</span><span class="value" id="hazardCount">0</span></div>
+      <div id="hazardList" style="max-height: 160px; overflow-y: auto; font-size: 12px; margin-top: 8px;"></div>
+      <div class="hint">Geometric classification from LiDAR only (obstacle / wall / void) -- no semantic labels, no camera on this build.</div>
+    </div>
+
+    <div class="panel">
+      <div class="hint">
+        Battery/current telemetry not wired -- INA219 isn't in the
+        current build. Add a voltage divider on an ADC pin if you want
+        this back.
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top: 16px;">
+      <div class="status-row">
+        <span class="label">Debug log</span>
+        <button id="clearLogBtn" class="secondary" style="margin:0; padding:4px 10px; font-size:11px;">Clear</button>
+      </div>
+      <div id="debugCounters" style="font-size:11px; color:#8b949e; margin:8px 0; display:flex; flex-wrap:wrap; gap:12px;"></div>
+      <div id="debugLog" style="background:#010409; border-radius:6px; padding:8px; font-family: ui-monospace, Consolas, monospace; font-size:11px; height:180px; overflow-y:auto; white-space:pre-wrap;"></div>
+      <div class="hint" style="margin-top:6px;">
+        Counters show total messages received per topic since connecting --
+        if a counter stays at 0, that node isn't publishing (check it's
+        running / launched) or rosbridge isn't relaying it (check topic
+        name spelling matches exactly).
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let ros = null;
+let mapMsg = null;
+let robotPose = null; // {x, y, theta} in map frame
+let autonomyState = 'IDLE';
+
+const canvas = document.getElementById('mapCanvas');
+const ctx = canvas.getContext('2d');
+
+// ---------------- Debug log / message counters ----------------
+const debugCounts = {};
+
+function logDebug(msg) {
+  const el = document.getElementById('debugLog');
+  const ts = new Date().toLocaleTimeString();
+  el.textContent += `[${ts}] ${msg}\n`;
+  // Cap to last 300 lines so this doesn't grow unbounded over a long trial
+  const lines = el.textContent.split('\n');
+  if (lines.length > 300) el.textContent = lines.slice(-300).join('\n');
+  el.scrollTop = el.scrollHeight;
+}
+
+function bumpCounter(name) {
+  debugCounts[name] = (debugCounts[name] || 0) + 1;
+  const el = document.getElementById('debugCounters');
+  el.innerHTML = Object.entries(debugCounts)
+    .map(([k, v]) => `<span>${k}: <b>${v}</b></span>`).join('');
+}
+
+document.getElementById('clearLogBtn').addEventListener('click', () => {
+  document.getElementById('debugLog').textContent = '';
+});
+
+function connect() {
+  const url = document.getElementById('wsUrl').value;
+  logDebug('Connecting to ' + url + ' ...');
+  ros = new ROSLIB.Ros({ url });
+
+  ros.on('connection', () => {
+    document.getElementById('connStatus').textContent = 'connected';
+    document.getElementById('connStatus').className = 'value ok';
+    logDebug('Connected.');
+    subscribeAll();
+  });
+  ros.on('error', (e) => {
+    document.getElementById('connStatus').textContent = 'error';
+    document.getElementById('connStatus').className = 'value danger';
+    logDebug('Rosbridge error: ' + (e && e.message ? e.message : JSON.stringify(e)));
+  });
+  ros.on('close', () => {
+    document.getElementById('connStatus').textContent = 'disconnected';
+    document.getElementById('connStatus').className = 'value warn';
+    logDebug('Connection closed.');
+  });
+}
+
+function subscribeAll() {
+  new ROSLIB.Topic({ ros, name: '/map', messageType: 'nav_msgs/OccupancyGrid' })
+    .subscribe((msg) => { mapMsg = msg; drawMap(); bumpCounter('map'); });
+
+  new ROSLIB.Topic({ ros, name: '/autonomy/state', messageType: 'std_msgs/String' })
+    .subscribe((msg) => {
+      if (msg.data !== autonomyState) logDebug('autonomy/state: ' + autonomyState + ' -> ' + msg.data);
+      autonomyState = msg.data;
+      document.getElementById('autonomyState').textContent = autonomyState;
+      const overriding = autonomyState === 'MANUAL_OVERRIDE';
+      document.getElementById('overrideToggleBtn').textContent = overriding ? 'Disable' : 'Enable';
+      document.getElementById('teleopPad').style.opacity = overriding ? '1' : '0.4';
+      document.getElementById('teleopPad').style.pointerEvents = overriding ? 'auto' : 'none';
+    });
+
+  new ROSLIB.Topic({ ros, name: '/autonomy/mode', messageType: 'std_msgs/String' })
+    .subscribe((msg) => {
+      document.getElementById('autonomyMode').textContent = msg.data;
+    });
+
+  new ROSLIB.Topic({ ros, name: '/hazards', messageType: 'std_msgs/String' })
+    .subscribe((msg) => {
+      let hazards = [];
+      try { hazards = JSON.parse(msg.data); } catch (e) { logDebug('hazards: JSON parse failed: ' + e.message); return; }
+      bumpCounter('hazards');
+
+      document.getElementById('hazardCount').textContent = hazards.length;
+      const listEl = document.getElementById('hazardList');
+      listEl.innerHTML = '';
+      hazards.forEach((h) => {
+        const row = document.createElement('div');
+        row.className = 'status-row';
+        const rangeStr = h.range_m !== null && h.range_m !== undefined ? h.range_m.toFixed(2) + 'm' : '--';
+        row.innerHTML = `<span class="label">${h.type}</span><span class="value">${rangeStr}</span>`;
+        listEl.appendChild(row);
+      });
+    });
+
+  new ROSLIB.Topic({ ros, name: '/floor_drop_alert', messageType: 'std_msgs/Bool' })
+    .subscribe((msg) => {
+      const el = document.getElementById('floorDrop');
+      const wasDrop = el.textContent === 'DROP DETECTED';
+      if (msg.data && !wasDrop) logDebug('floor_drop_alert: DROP DETECTED');
+      if (!msg.data && wasDrop) logDebug('floor_drop_alert: clear');
+      el.textContent = msg.data ? 'DROP DETECTED' : 'clear';
+      el.className = 'value ' + (msg.data ? 'danger' : 'ok');
+    });
+
+  new ROSLIB.Topic({ ros, name: '/floor_drop_measured_range', messageType: 'std_msgs/Float32' })
+    .subscribe((msg) => {
+      document.getElementById('floorRange').textContent = msg.data.toFixed(2) + ' m';
+    });
+
+  new ROSLIB.Topic({ ros, name: '/wheel_odom', messageType: 'nav_msgs/Odometry' })
+    .subscribe((msg) => {
+      const v = msg.twist.twist.linear.x;
+      document.getElementById('odomSpeed').textContent = v.toFixed(2) + ' m/s';
+      bumpCounter('odom');
+
+      const q = msg.pose.pose.orientation;
+      const theta = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
+      robotPose = { x: msg.pose.pose.position.x, y: msg.pose.pose.position.y, theta };
+      drawMap();
+    });
+
+  // IMU roll/pitch -- tilt_compensation_node publishes this on
+  // /imu/filtered_pitch_roll (geometry_msgs/Vector3, DEGREES: x=roll, y=pitch)
+  new ROSLIB.Topic({ ros, name: '/imu/filtered_pitch_roll', messageType: 'geometry_msgs/Vector3' })
+    .subscribe((msg) => {
+      document.getElementById('imuRP').textContent =
+        msg.x.toFixed(1) + ' / ' + msg.y.toFixed(1) + ' deg';
+      bumpCounter('imu');
+    });
+}
+
+// Uniform scale (not stretched per-axis) so non-square SLAM maps
+// don't cause y-index overflow / misaligned clicks. Letterboxes with
+// the canvas background rather than distorting the aspect ratio.
+function getMapTransform() {
+  const { width, height } = mapMsg.info;
+  const scale = Math.min(canvas.width / width, canvas.height / height);
+  const drawWidth = Math.round(width * scale);
+  const drawHeight = Math.round(height * scale);
+  const offsetX = Math.floor((canvas.width - drawWidth) / 2);
+  const offsetY = Math.floor((canvas.height - drawHeight) / 2);
+  return { scale, drawWidth, drawHeight, offsetX, offsetY };
+}
+
+function drawMap() {
+  if (!mapMsg) return;
+  const { width, height, resolution, origin } = mapMsg.info;
+  const data = mapMsg.data;
+  const { scale, drawWidth, drawHeight, offsetX, offsetY } = getMapTransform();
+
+  ctx.fillStyle = '#010409';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const imgData = ctx.createImageData(drawWidth, drawHeight);
+
+  // Simple nearest-neighbor upscale from grid cells to canvas pixels
+  for (let py = 0; py < drawHeight; py++) {
+    for (let px = 0; px < drawWidth; px++) {
+      const gx = Math.min(width - 1, Math.floor(px / scale));
+      const gy = Math.min(height - 1, height - 1 - Math.floor(py / scale)); // flip Y (image vs map convention)
+      const idx = gy * width + gx;
+      const val = data[idx];
+
+      let r, g, b;
+      if (val === -1) { r = g = b = 60; }           // unknown = dark gray
+      else if (val < 40) { r = g = b = 230; }        // free = light
+      else { r = g = b = 20; }                       // occupied = near black
+
+      const pIdx = (py * drawWidth + px) * 4;
+      imgData.data[pIdx] = r;
+      imgData.data[pIdx + 1] = g;
+      imgData.data[pIdx + 2] = b;
+      imgData.data[pIdx + 3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, offsetX, offsetY);
+
+  if (robotPose) {
+    const gx = (robotPose.x - origin.position.x) / resolution;
+    const gy = (robotPose.y - origin.position.y) / resolution;
+    const px = offsetX + gx * scale;
+    const py = offsetY + drawHeight - gy * scale;
+
+    ctx.fillStyle = '#58a6ff';
+    ctx.beginPath();
+    ctx.arc(px, py, 6, 0, 2 * Math.PI);
+    ctx.fill();
+
+    const heading_len = 14;
+    ctx.strokeStyle = '#58a6ff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + heading_len * Math.cos(robotPose.theta),
+               py - heading_len * Math.sin(robotPose.theta));
+    ctx.stroke();
+  }
+}
+
+canvas.addEventListener('click', (e) => {
+  if (!mapMsg || !ros) return;
+  if (autonomyState !== 'AWAITING_GOAL') {
+    alert('Rover is not ready for a new goal (state: ' + autonomyState + '). ' +
+          'Wait for exploration to finish first.');
+    return;
+  }
+
+  const rect = canvas.getBoundingClientRect();
+  const px = e.clientX - rect.left;
+  const py = e.clientY - rect.top;
+
+  const { width, height, resolution, origin } = mapMsg.info;
+  const { scale, drawWidth, drawHeight, offsetX, offsetY } = getMapTransform();
+
+  // Ignore clicks that land in the letterbox margin, not on the map itself
+  if (px < offsetX || px > offsetX + drawWidth || py < offsetY || py > offsetY + drawHeight) {
+    return;
+  }
+
+  const gx = (px - offsetX) / scale;
+  const gy = height - (py - offsetY) / scale;
+  const worldX = origin.position.x + gx * resolution;
+  const worldY = origin.position.y + gy * resolution;
+
+  const goalTopic = new ROSLIB.Topic({
+    ros, name: '/autonomy/goal_pose', messageType: 'geometry_msgs/PoseStamped'
+  });
+  goalTopic.publish(new ROSLIB.Message({
+    header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
+    pose: {
+      position: { x: worldX, y: worldY, z: 0 },
+      orientation: { x: 0, y: 0, z: 0, w: 1 }
+    }
+  }));
+
+  logDebug(`Sent goal: (${worldX.toFixed(2)}, ${worldY.toFixed(2)})`);
+});
+
+
+document.getElementById('connectBtn').addEventListener('click', connect);
+
+function sendCommand(data) {
+  if (!ros) { logDebug('sendCommand("' + data + '") ignored -- not connected'); return; }
+  logDebug('Command: ' + data);
+  const cmdTopic = new ROSLIB.Topic({ ros, name: '/autonomy/command', messageType: 'std_msgs/String' });
+  cmdTopic.publish(new ROSLIB.Message({ data }));
+}
+
+document.getElementById('setModeBtn').addEventListener('click', () => {
+  const mode = document.getElementById('modeSelect').value;
+  sendCommand('set_mode:' + mode);
+});
+
+document.getElementById('startExploreBtn').addEventListener('click', () => sendCommand('start_explore'));
+document.getElementById('startNavigateBtn').addEventListener('click', () => sendCommand('start_navigate'));
+document.getElementById('cancelBtn').addEventListener('click', () => sendCommand('cancel'));
+
+let overrideEngaged = false;
+document.getElementById('overrideToggleBtn').addEventListener('click', () => {
+  overrideEngaged = !overrideEngaged;
+  logDebug('Manual override toggled: ' + (overrideEngaged ? 'ON' : 'OFF'));
+  sendCommand(overrideEngaged ? 'manual_override_on' : 'manual_override_off');
+});
+
+// ---------------- Manual teleop ----------------
+let teleopTopic = null;
+let teleopInterval = null;
+
+function getTeleopTopic() {
+  if (!teleopTopic && ros) {
+    teleopTopic = new ROSLIB.Topic({ ros, name: '/cmd_vel_teleop', messageType: 'geometry_msgs/Twist' });
+  }
+  return teleopTopic;
+}
+
+function publishTeleop(linear, angular) {
+  const topic = getTeleopTopic();
+  if (!topic) return;
+  topic.publish(new ROSLIB.Message({
+    linear: { x: linear, y: 0, z: 0 },
+    angular: { x: 0, y: 0, z: angular }
+  }));
+}
+
+function startTeleop(linear, angular) {
+  if (autonomyState !== 'MANUAL_OVERRIDE') return;
+  stopTeleopRepeat();
+  logDebug(`Teleop: linear=${linear} angular=${angular}`);
+  publishTeleop(linear, angular);
+  // Repeat while held so it stays under twist_mux's timeout (0.5s)
+  teleopInterval = setInterval(() => publishTeleop(linear, angular), 150);
+}
+
+function stopTeleopRepeat() {
+  if (teleopInterval) { clearInterval(teleopInterval); teleopInterval = null; }
+}
+
+function stopTeleop() {
+  stopTeleopRepeat();
+  publishTeleop(0, 0);
+}
+
+document.querySelectorAll('#teleopPad button[data-lin]').forEach((btn) => {
+  const lin = parseFloat(btn.getAttribute('data-lin'));
+  const ang = parseFloat(btn.getAttribute('data-ang'));
+  btn.addEventListener('mousedown', () => startTeleop(lin, ang));
+  btn.addEventListener('touchstart', (e) => { e.preventDefault(); startTeleop(lin, ang); });
+  btn.addEventListener('mouseup', stopTeleop);
+  btn.addEventListener('mouseleave', stopTeleop);
+  btn.addEventListener('touchend', stopTeleop);
+});
+document.getElementById('stopBtn').addEventListener('click', stopTeleop);
+
+const keyMap = {
+  ArrowUp: [0.3, 0], ArrowDown: [-0.3, 0], ArrowLeft: [0, 0.6], ArrowRight: [0, -0.6]
+};
+const pressedKeys = new Set();
+document.addEventListener('keydown', (e) => {
+  if (!(e.key in keyMap) || autonomyState !== 'MANUAL_OVERRIDE') return;
+  if (pressedKeys.has(e.key)) return;
+  pressedKeys.add(e.key);
+  startTeleop(...keyMap[e.key]);
+});
+document.addEventListener('keyup', (e) => {
+  if (!(e.key in keyMap)) return;
+  pressedKeys.delete(e.key);
+  if (pressedKeys.size === 0) stopTeleop();
+});
+</script>
+</body>
+</html>
