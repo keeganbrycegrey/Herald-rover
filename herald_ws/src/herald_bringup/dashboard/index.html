@@ -4,8 +4,7 @@ HERALD Telemetry Dashboard
 --------------------------------------------------------------------
 Single-file dashboard. Connects to rosbridge_websocket (started by
 herald_autonomy.launch.py, default ws://<pi-ip>:9090) over your
-laptop's network connection to the Pi. No ROS install needed on the
-laptop -- just a browser.
+laptop's network connection to the Pi. 
 
 Shows: live occupancy grid map with robot pose overlay, autonomy
 state + start/cancel controls, click-to-navigate (active only once
@@ -124,16 +123,9 @@ Update PI_IP below (or type it into the connection box at runtime).
     <div class="panel" style="margin-bottom: 16px;">
       <div class="status-row"><span class="label">Detected hazards</span><span class="value" id="hazardCount">0</span></div>
       <div id="hazardList" style="max-height: 160px; overflow-y: auto; font-size: 12px; margin-top: 8px;"></div>
-      <div class="hint">Geometric classification from LiDAR only (obstacle / wall / void) -- no semantic labels, no camera on this build.</div>
+      <div class="hint">Geometric classification from LiDAR only (obstacle / wall / void).</div>
     </div>
 
-    <div class="panel">
-      <div class="hint">
-        Battery/current telemetry not wired -- INA219 isn't in the
-        current build. Add a voltage divider on an ADC pin if you want
-        this back.
-      </div>
-    </div>
 
     <div class="panel" style="margin-top: 16px;">
       <div class="status-row">
