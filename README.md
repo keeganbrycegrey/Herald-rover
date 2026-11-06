@@ -1,7 +1,5 @@
 # HERALD codebase
 
-## AN ENTRY TO THE DIVISION SCIENCE AND TECHNOLOGY FAIR - DIVISION OF QUEZON - REGION IV-A CALABARZON - PHILIPPINES
-
 HERALD is a ROS 2 Humble rover stack with an ESP32 motor controller, a Raspberry Pi 4 compute node, a 2D LiDAR, and an MPU6050 IMU.
 
 ## Layout
